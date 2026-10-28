@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+coverage/
+test-results/
+*.tsbuildinfo
+daylight-backup-*.json
+daylight-recovery.json
+daylight-unsaved-backup.json
