@@ -1,8 +1,10 @@
 # Verification notes
 
+Current scheduling verification (28 October 2026): **80 unit/regression tests and 8 browser tests passed**. The production PWA build and Pages-path verification passed at `/-daylight/`. Reproduction commands and current limitations are under “Scheduling regression checks” below and in [SCHEDULING_CHANGES.md](./SCHEDULING_CHANGES.md). The initial-release checks below are historical; the current build retains the repository base path.
+
 Tested on Windows with Node 24, a production Vite build, and a Chromium-based integrated browser. Browser fixture data was kept in an isolated browser context, separate from the visible workspace.
 
-## Automated regression coverage
+## Initial-release automated regression coverage
 
 Run `npm.cmd test`. All **50 tests** passed, and `npm.cmd run build` completed successfully. The suite covers:
 
@@ -47,3 +49,20 @@ Prepared without creating a repository, pushing code, or executing a remote depl
 - Production build output was restored to the default root base after verification, so the usual local preview command still works. GitHub Actions supplies the actual Pages path at build time.
 
 Real iPhone Safari Home Screen installation and a live GitHub Pages deployment remain for the user to confirm after configuration review. See [DEPLOYMENT.md](./DEPLOYMENT.md).
+
+# Scheduling regression checks
+
+The full scheduling change report is [SCHEDULING_CHANGES.md](./SCHEDULING_CHANGES.md).
+
+```powershell
+npm.cmd ci
+npm.cmd test
+$env:VITE_BASE_PATH='/-daylight/'
+npm.cmd run build
+npm.cmd run verify:pages
+npm.cmd run test:browser
+```
+
+Browser tests start and stop their own preview on port 4201 and refuse to reuse another server. Every case uses a separate browser context and refuses to seed a context with an existing Daylight database. They use synthetic fixtures, never the deployed workspace. Windows defaults to installed Microsoft Edge. On other systems install the free Chromium test browser with `npx playwright install chromium`, or set `PLAYWRIGHT_CHANNEL` to an installed supported browser. Both desktop and 390×844 phone layouts run; this does not emulate Safari.
+
+The browser suite verifies v1 migration/backup, exam-week class/travel suspension and resumption, weekday/date bus rules, Generate → proposals → modify/reject/regenerate → accept → reload → offline reopen, quota failure visibility/retry, duplicate-click prevention, blocked-time explanations, invalid planning input, and no implicit approval on closing a proposal.

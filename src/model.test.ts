@@ -11,7 +11,7 @@ describe("validated portable backups", () => {
       );
   });
   it("rejects unsupported versions and incomplete files", () => {
-    expect(stateSchema.safeParse({ ...emptyState(), version: 2 }).success).toBe(
+    expect(stateSchema.safeParse({ ...emptyState(), version: 99 }).success).toBe(
       false,
     );
     expect(stateSchema.safeParse({ version: 1 }).success).toBe(false);

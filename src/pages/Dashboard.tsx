@@ -344,7 +344,7 @@ export default function Dashboard({
               together.
             </p>
             <Button onClick={plan} icon={ArrowRight}>
-              Suggest a study plan
+              Generate Study Plan
             </Button>
             <small>Always a suggestion. Always your choice.</small>
           </section>

@@ -31,7 +31,8 @@ Open the printed localhost address while online and wait for the service worker 
 4. In Grades, create your own assessment components and weights. They must total 100% for target and final-grade calculations to be valid.
 5. In Exams, add the exact local date/time of any assessment. Optionally link it to a grading component so its weight stays consistent.
 6. Add weekly workout routines and other calendar activities. Daily meals are off until you configure a duration; if a preferred meal overlaps class/travel/recovery, it joins post-university recovery instead.
-7. From the Dashboard, choose **Suggest a study plan**. Review, modify, regenerate, reject, or explicitly accept it.
+7. In Calendar → Academic calendar, add named exam periods and weekday/date return commuting rules. Recurring classes are suspended during enabled periods; the saved timetable resumes afterward. Mark an exam or activity as requiring university travel when appropriate.
+8. From Dashboard or Calendar, choose **Generate Study Plan**. Review subject, date, time, duration, and reasons. Modify, regenerate, reject, accept a session (with its following break), or accept the plan. Acceptance finishes only after IndexedDB confirms the transaction.
 
 First launch is empty. Settings offers an optional, clearly labeled example workspace. Loading it replaces the current data only after review and confirmation.
 
@@ -62,6 +63,8 @@ For the attachment's example (90/100 at 10%, 85/100 at 30%, and an ungraded 60% 
 What-if inputs never change real scores. The projected final assumes the target percentage on unspecified assessments, and explicitly labels that assumption. GPA scenarios use entered final percentages, configurable grade-point bands, and unequal course credits. Current semester/cumulative **pace GPA is provisional**: it uses the normalized average of graded components in valid grading structures. Previous-semester GPA is weighted by earned credits. Target-based projections are scenarios, not grade predictions.
 
 ## Local data and backups
+
+The current workspace schema and IndexedDB database version are 2. Version 1 workspaces and JSON backups remain supported. The first successful migration adds empty exam-period, commute-rule and acceptance-receipt collections, enables class suspension, and keeps an untouched copy of the original v1 payload at `workspace/migration-backup-v1`. Migration and backup commit together; a failed migration leaves the original payload intact. If an older open tab blocks the upgrade, close other Daylight tabs/installed windows and retry. Do not clear browser storage. See [SCHEDULING_CHANGES.md](./SCHEDULING_CHANGES.md) for implementation and verification details.
 
 All personal records are saved in the current browser's IndexedDB, under the current origin. Nothing is sent to a server. App code can be hosted statically; personal data remains on the device.
 

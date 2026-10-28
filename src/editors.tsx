@@ -681,6 +681,7 @@ function ExamEditor({ editor, close }: Props) {
         difficulty: num(f, "difficulty"),
         preparation: num(f, "preparation"),
         completed: f.has("completed"),
+        requiresUniversityTrip: f.has("requiresUniversityTrip"),
       },
       setError,
     );
@@ -826,6 +827,7 @@ function ExamEditor({ editor, close }: Props) {
           />
           Assessment finished (enter its score separately in Grades)
         </label>
+        <label className="check-field"><input type="checkbox" name="requiresUniversityTrip" defaultChecked={item?.requiresUniversityTrip ?? false} />This exam requires university travel, including during suspended class periods</label>
         <FormError error={error} />
         <Footer close={close} label="Save assessment date" />
       </form>
@@ -1064,6 +1066,7 @@ function ActivityEditor({ editor, close }: Props) {
         completed: item?.completed ?? false,
         completedMinutes: item?.completedMinutes ?? 0,
         subjectId: optional(f, "subjectId"),
+        requiresUniversityTrip: f.has("requiresUniversityTrip"),
       },
       setError,
     );
@@ -1188,6 +1191,7 @@ function ActivityEditor({ editor, close }: Props) {
           Duration is calculated from start and end times. Flexible activities
           can be moved in the calendar.
         </p>
+        <label className="check-field"><input type="checkbox" name="requiresUniversityTrip" defaultChecked={item?.requiresUniversityTrip ?? false} />This activity requires a university trip</label>
         <FormError error={error} />
         <Footer
           close={close}

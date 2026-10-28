@@ -71,7 +71,8 @@ export default function App() {
     [drawer, setDrawer] = useState(false),
     [editor, setEditor] = useState<Editor | null>(null),
     [planning, setPlanning] = useState(false),
-    [calendarDate, setCalendarDate] = useState(today);
+    [calendarDate, setCalendarDate] = useState(today),
+    [calendarRevision, setCalendarRevision] = useState(0);
   const navigate = (value: Page) => {
     setPage(value);
     location.hash = value.toLowerCase();
@@ -109,10 +110,11 @@ export default function App() {
       />
     ) : page === "Calendar" ? (
       <Calendar
-        key={calendarDate}
+        key={`${calendarDate}:${calendarRevision}`}
         now={now}
         open={open}
         selectedDate={calendarDate}
+        plan={() => setPlanning(true)}
       />
     ) : page === "Subjects" ? (
       <Subjects open={open} />
@@ -364,7 +366,18 @@ export default function App() {
           open={open}
         />
       )}
-      {planning && <Planner now={now} close={() => setPlanning(false)} />}
+      {planning && (
+        <Planner
+          now={now}
+          close={() => setPlanning(false)}
+          viewCalendar={(date) => {
+            setPlanning(false);
+            setCalendarDate(date);
+            setCalendarRevision((n) => n + 1);
+            navigate("Calendar");
+          }}
+        />
+      )}
     </div>
   );
 }

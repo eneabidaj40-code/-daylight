@@ -91,6 +91,7 @@ export const activitySchema = z
     completed: z.boolean(),
     completedMinutes: z.number().min(0).max(100000),
     subjectId: id.optional(),
+    requiresUniversityTrip: z.boolean().optional(),
   })
   .refine(
     (v) => Date.parse(v.end) > Date.parse(v.start),
@@ -133,6 +134,7 @@ export const examSchema = z.object({
   difficulty: z.number().int().min(1).max(5),
   preparation: percent,
   completed: z.boolean(),
+  requiresUniversityTrip: z.boolean().optional(),
 });
 export const exerciseSchema = z.object({
   id,
@@ -178,6 +180,7 @@ export const settingsSchema = z
     minSleep: z.number().min(4).max(12),
     commuteTo: z.number().int().min(0).max(240),
     commuteHome: z.number().int().min(0).max(240),
+    suspendClassesDuringExamPeriods: z.boolean().default(true),
     restMinutes: z.number().int().min(0).max(240),
     mealTime: time,
     mealMinutes: z.number().int().min(0).max(180),
@@ -219,9 +222,48 @@ export const settingsSchema = z
       new Set(v.gradeScale.map((g) => g.min)).size === v.gradeScale.length,
     "Grade boundaries must be unique and include 0",
   );
+export const examPeriodSchema = z
+  .object({
+    id,
+    name,
+    startDate: date,
+    endDate: date,
+    suspendClasses: z.boolean().default(true),
+  })
+  .refine(
+    (p) => p.endDate >= p.startDate,
+    "Exam period end must follow its start",
+  );
+export const commuteRuleSchema = z
+  .object({
+    id,
+    weekday: z.number().int().min(1).max(7).optional(),
+    date: date.optional(),
+    mode: z.enum(["after-class", "departure"]),
+    departureTime: time.optional(),
+    waitingMinutes: z.number().int().min(0).max(360),
+    durationMinutes: z.number().int().min(0).max(480),
+    arrivalTime: time.optional(),
+  })
+  .refine(
+    (r) => (r.weekday !== undefined) !== (r.date !== undefined),
+    "Choose either a weekday or a date override",
+  )
+  .refine(
+    (r) => r.mode !== "departure" || !!r.departureTime,
+    "Enter the bus departure time",
+  )
+  .refine(
+    (r) =>
+      !r.arrivalTime ||
+      r.mode !== "departure" ||
+      r.arrivalTime >= r.departureTime!,
+    "Arrival cannot precede departure",
+  );
+
 export const stateSchema = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
     example: z.boolean(),
     settings: settingsSchema,
     subjects: z.array(subjectSchema).max(1000),
@@ -249,6 +291,9 @@ export const stateSchema = z
       )
       .max(100),
     rejectedDays: z.array(date).max(10000),
+    examPeriods: z.array(examPeriodSchema).max(1000).default([]),
+    commuteRules: z.array(commuteRuleSchema).max(5000).default([]),
+    acceptedSuggestionIds: z.array(id).max(100000).default([]),
   })
   .superRefine((s, ctx) => {
     const ids = new Set<string>();
@@ -259,6 +304,8 @@ export const stateSchema = z
       ...s.exams,
       ...s.workouts,
       ...s.previousSemesters,
+      ...s.examPeriods,
+      ...s.commuteRules,
       ...s.subjects.flatMap((x) => [...x.topics, ...x.assessments]),
       ...s.workouts.flatMap((x) => x.exercises),
     ]) {
@@ -285,7 +332,23 @@ export const stateSchema = z
           code: "custom",
           message: "An exam links to a missing assessment",
         });
-  });
+    const ruleKeys = s.commuteRules.map((r) =>
+      r.date ? `date:${r.date}` : `weekday:${r.weekday}`,
+    );
+    if (new Set(ruleKeys).size !== ruleKeys.length)
+      ctx.addIssue({
+        code: "custom",
+        message: "Only one commuting rule is allowed per weekday or date",
+      });
+    if (
+      new Set(s.acceptedSuggestionIds).size !== s.acceptedSuggestionIds.length
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Duplicate proposal acceptance receipts",
+      });
+  })
+  .transform((s) => ({ ...s, version: 2 as const }));
 export type Subject = z.infer<typeof subjectSchema>;
 export type Topic = z.infer<typeof topicSchema>;
 export type Assessment = z.infer<typeof assessmentSchema>;
@@ -294,6 +357,8 @@ export type ClassEntry = z.infer<typeof classSchema>;
 export type Exam = z.infer<typeof examSchema>;
 export type Workout = z.infer<typeof workoutSchema>;
 export type Settings = z.infer<typeof settingsSchema>;
+export type ExamPeriod = z.infer<typeof examPeriodSchema>;
+export type CommuteRule = z.infer<typeof commuteRuleSchema>;
 export type AppState = z.infer<typeof stateSchema>;
 export type Occurrence = Activity & {
   source: "activity" | "class" | "exam" | "workout" | "routine";
@@ -302,7 +367,7 @@ export type Occurrence = Activity & {
 export const uid = () => crypto.randomUUID();
 export function emptyState(): AppState {
   return {
-    version: 1,
+    version: 2,
     example: false,
     subjects: [],
     activities: [],
@@ -312,6 +377,9 @@ export function emptyState(): AppState {
     completions: {},
     previousSemesters: [],
     rejectedDays: [],
+    examPeriods: [],
+    commuteRules: [],
+    acceptedSuggestionIds: [],
     settings: {
       name: "",
       theme: "light",
@@ -321,6 +389,7 @@ export function emptyState(): AppState {
       minSleep: 8,
       commuteTo: 60,
       commuteHome: 60,
+      suspendClassesDuringExamPeriods: true,
       restMinutes: 60,
       mealTime: "12:30",
       mealMinutes: 0,

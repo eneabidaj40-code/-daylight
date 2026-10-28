@@ -1,56 +1,21 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { emptyState, stateSchema, type AppState } from "./model";
+import { stateSchema, type AppState } from "./model";
+import { WorkspaceRepository } from "./persistence";
 
-const DB_NAME = "daylight-private-planner";
-let dbPromise: Promise<IDBDatabase> | undefined;
-function database() {
-  if (!dbPromise)
-    dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, 1);
-      request.onupgradeneeded = () =>
-        request.result.createObjectStore("workspace");
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => {
-        dbPromise = undefined;
-        reject(request.error);
-      };
-      request.onblocked = () => {
-        dbPromise = undefined;
-        reject(new Error("Close other Daylight tabs to open the database."));
-      };
-    });
-  return dbPromise;
-}
-async function read() {
-  const db = await database();
-  return new Promise<unknown>((resolve, reject) => {
-    const tx = db.transaction("workspace", "readonly");
-    const request = tx.objectStore("workspace").get("state");
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-async function write(state: AppState) {
-  const db = await database();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction("workspace", "readwrite");
-    tx.objectStore("workspace").put(state, "state");
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () =>
-      reject(tx.error ?? new Error("Storage transaction aborted"));
-  });
-}
+export const workspaceRepository = new WorkspaceRepository();
+type Mutation = (state: AppState) => AppState;
 type Store = {
   state: AppState;
-  update: (fn: (state: AppState) => AppState) => void;
+  update: (fn: Mutation) => void;
+  commit: (fn: Mutation) => Promise<AppState>;
   replace: (state: AppState) => void;
   toast: (message: string) => void;
   saveStatus: "saved" | "saving" | "error";
@@ -73,51 +38,86 @@ export function downloadJSON(value: unknown, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AppState | null>(null),
-    [error, setError] = useState(""),
-    [raw, setRaw] = useState<unknown>();
-  const [saveStatus, setSaveStatus] = useState<Store["saveStatus"]>("saved"),
-    [message, setMessage] = useState("");
-  const pending = useRef(Promise.resolve()),
-    revision = useRef(0),
-    timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [state, setState] = useState<AppState | null>(null);
+  const [error, setError] = useState("");
+  const [raw, setRaw] = useState<unknown>();
+  const [saveStatus, setSaveStatus] = useState<Store["saveStatus"]>("saved");
+  const [saveError, setSaveError] = useState("");
+  const [message, setMessage] = useState("");
+  const pending = useRef<Promise<unknown>>(Promise.resolve());
+  const revision = useRef(0);
+  const failed = useRef<Mutation[]>([]);
+  const lastFailure = useRef<Mutation | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toast = (text: string) => {
     setMessage(text);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setMessage(""), 5000);
   };
+  const commit = useCallback((mutate: Mutation): Promise<AppState> => {
+    const n = ++revision.current;
+    setSaveStatus("saving");
+    const operation = pending.current
+      .catch(() => {})
+      .then(() => workspaceRepository.transact(mutate));
+    pending.current = operation;
+    return operation.then(
+      (saved) => {
+        setState(saved);
+        failed.current = failed.current.filter((fn) => fn !== mutate);
+        if (n === revision.current) {
+          if (failed.current.length) setSaveStatus("error");
+          else {
+            lastFailure.current = null;
+            setSaveError("");
+            setSaveStatus("saved");
+          }
+        }
+        return saved;
+      },
+      (cause) => {
+        lastFailure.current = mutate;
+        setSaveError(cause instanceof Error ? cause.message : String(cause));
+        setSaveStatus("error");
+        throw cause;
+      },
+    );
+  }, []);
+  const update = (fn: Mutation) => {
+    void commit(fn).catch(() => {
+      if (!failed.current.includes(fn)) failed.current.push(fn);
+      setSaveStatus("error");
+    });
+  };
+  const retrySave = () => {
+    const retries = failed.current.length
+      ? [...failed.current]
+      : lastFailure.current
+        ? [lastFailure.current]
+        : [];
+    retries.forEach(update);
+  };
   useEffect(() => {
     let live = true;
-    read()
+    workspaceRepository
+      .readRaw()
       .then((value) => {
-        if (!live) return;
-        setRaw(value);
-        setState(value === undefined ? emptyState() : stateSchema.parse(value));
+        if (live) setRaw(value);
+        return workspaceRepository.load();
       })
-      .catch((e) => {
+      .then((value) => {
+        if (live) setState(value);
+      })
+      .catch((cause) => {
         if (live)
           setError(
-            `Your local workspace could not be opened. ${e instanceof Error ? e.message : String(e)}`,
+            `Your local workspace could not be opened. ${cause instanceof Error ? cause.message : String(cause)}`,
           );
       });
     return () => {
       live = false;
     };
   }, []);
-  useEffect(() => {
-    if (!state) return;
-    const n = ++revision.current;
-    setSaveStatus("saving");
-    pending.current = pending.current
-      .catch(() => {})
-      .then(() => write(state))
-      .then(() => {
-        if (revision.current === n) setSaveStatus("saved");
-      })
-      .catch(() => {
-        if (revision.current === n) setSaveStatus("error");
-      });
-  }, [state]);
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (saveStatus !== "saved") {
@@ -132,37 +132,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return (
       <div className="recovery">
         <h1>Your workspace needs attention</h1>
-        <p>{error}</p>
+        <p role="alert">{error}</p>
         <p>
-          No data has been overwritten. Enable browser storage and try again.
+          Your stored records have been retained. Enable browser storage, close
+          old Daylight windows, and try again.
         </p>
         <button className="btn primary" onClick={() => location.reload()}>
           Try again
         </button>
         {raw !== undefined && (
-          <>
-            <button
-              className="btn"
-              onClick={() => downloadJSON(raw, "daylight-recovery.json")}
-            >
-              Download recovery copy
-            </button>
-            <button
-              className="btn danger"
-              onClick={() => {
-                if (
-                  confirm(
-                    "Download a recovery copy first. Replace this unreadable local workspace with an empty one?",
-                  )
-                ) {
-                  setError("");
-                  setState(emptyState());
-                }
-              }}
-            >
-              Start empty
-            </button>
-          </>
+          <button
+            className="btn"
+            onClick={() => downloadJSON(raw, "daylight-recovery.json")}
+          >
+            Download recovery copy
+          </button>
         )}
       </div>
     );
@@ -170,29 +154,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return (
       <div className="loading">
         <div className="loader" />
-        <p>Making room for your day…</p>
+        <p>Opening your local workspace…</p>
       </div>
     );
   return (
     <Context.Provider
       value={{
         state,
-        update: (fn) => setState((current) => fn(current!)),
-        replace: (value) => setState(stateSchema.parse(value)),
+        update,
+        commit,
+        replace: (value) => update(() => stateSchema.parse(value)),
         toast,
         saveStatus,
-        retrySave: () => setState({ ...state }),
+        retrySave,
       }}
     >
       {saveStatus === "error" && (
         <div className="storage-alert" role="alert">
-          Changes are not saved. Storage may be full or blocked.{" "}
-          <button
-            onClick={() => downloadJSON(state, "daylight-unsaved-backup.json")}
-          >
-            Export a backup
+          Changes were not saved. {saveError}{" "}
+          <button onClick={() => downloadJSON(state, "daylight-backup.json")}>
+            Export saved workspace
           </button>
-          <button onClick={() => setState({ ...state })}>Retry saving</button>
+          <button onClick={retrySave}>Retry saving</button>
         </div>
       )}
       {children}

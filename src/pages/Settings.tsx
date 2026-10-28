@@ -64,7 +64,7 @@ export default function Settings({ pwa }: { pwa: PWA }) {
       const parsed = stateSchema.safeParse(JSON.parse(await file.text()));
       if (!parsed.success) {
         setError(
-          `This is not a valid Daylight v1 backup. ${parsed.error.issues
+          `This is not a valid Daylight v1 or v2 backup. ${parsed.error.issues
             .slice(0, 2)
             .map((i) => i.message)
             .join(". ")}`,
@@ -377,10 +377,10 @@ export default function Settings({ pwa }: { pwa: PWA }) {
                   100 + workload influence × min(2, topic minutes ÷ 600)).
                 </p>
                 <p>
-                  Exam urgency = 3 ÷ (1 + days ÷ 7) × (1 − preparation ÷ 100 ×
-                  0.8). Unfinished topics due within 7 days add 0.7 urgency.
-                  Allocation balances this score against already allocated study
-                  time. Passed assessments are excluded.
+                  Exam urgency = 3 ÷ (1 + hours until exact exam time ÷ 168) ×
+                  (1 − preparation ÷ 100 × 0.8). Unfinished topics due within 7
+                  days add 0.7 urgency. Allocation balances this score against
+                  already allocated study time. Passed assessments are excluded.
                 </p>
               </details>
             </section>

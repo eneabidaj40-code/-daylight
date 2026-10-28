@@ -4374,3 +4374,64 @@ tfoot td {
   border-color: #b9d5b0;
   color: #1d3024;
 }
+.academic-settings {
+  display: grid;
+  gap: 22px;
+}
+.academic-settings > .card {
+  padding: 24px;
+}
+.academic-settings .card-heading {
+  padding: 0 0 20px;
+}
+.academic-settings .check-row,
+.academic-settings .actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.academic-settings input[type="checkbox"] {
+  width: auto;
+}
+.academic-settings form,
+.academic-settings .notice {
+  margin-top: 24px;
+}
+.academic-settings h3 {
+  margin-bottom: 15px;
+}
+.academic-settings .check-row {
+  margin: 14px 0;
+}
+.academic-settings .section-label {
+  flex-wrap: wrap;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border);
+}
+.planner details {
+  margin: 16px 0;
+}
+.plan-session p {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .academic-settings > .card {
+    padding: 18px;
+  }
+  .academic-settings .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .page-tabs {
+    flex-wrap: wrap;
+  }
+  .plan-session {
+    flex-wrap: wrap;
+  }
+  .plan-session > div {
+    flex-basis: calc(100% - 24px);
+  }
+  .plan-session > .btn {
+    margin-left: 20px;
+  }
+}

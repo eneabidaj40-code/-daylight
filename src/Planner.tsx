@@ -1,18 +1,9 @@
-import { useState } from "react";
-import {
-  Check,
-  ChevronDown,
-  Pencil,
-  RefreshCw,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { useStore } from "./store";
 import { generatePlan, validatePlan, type Suggestion } from "./schedule";
-import { uid } from "./model";
+import { acceptProposal, modifyProposal, receiptFor } from "./proposals";
 import {
-  at,
   clockTime,
   dayKey,
   duration,
@@ -20,77 +11,133 @@ import {
   localInput,
   prettyDay,
 } from "./time";
-import {
-  Button,
-  Empty,
-  Field,
-  FormError,
-  IconButton,
-  Modal,
-  Progress,
-} from "./ui";
+import { Button, Field, FormError, IconButton, Modal } from "./ui";
 
 export default function Planner({
   now,
   close,
+  viewCalendar,
 }: {
   now: Date;
   close: () => void;
+  viewCalendar?: (date: string) => void;
 }) {
-  const { state, update, toast } = useStore(),
-    tz = state.settings.timezone,
-    today = dayKey(now, tz);
-  const [first, setFirst] = useState(today),
-    [count, setCount] = useState(7),
-    [plan, setPlan] = useState<Suggestion>(() =>
-      generatePlan(state, today, 7, now),
-    ),
-    [editing, setEditing] = useState(false),
-    [error, setError] = useState("");
+  const { state, commit, toast } = useStore(),
+    tz = state.settings.timezone;
+  const [first, setFirst] = useState(dayKey(now, tz));
+  const [count, setCount] = useState(7);
+  const [plan, setPlan] = useState<Suggestion | null>(null);
+  const [status, setStatus] = useState<
+    | "loading"
+    | "idle"
+    | "ready"
+    | "empty"
+    | "error"
+    | "saving"
+    | "accepted"
+    | "rejected"
+  >("loading");
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const generation = useRef(0),
+    saving = useRef(false);
+  const latest = useRef({ state, first, count });
+  latest.current = { state, first, count };
   const regenerate = () => {
+    const token = ++generation.current;
+    setStatus("loading");
     setError("");
     setEditing(false);
-    setPlan(generatePlan(state, first, count, new Date()));
+    setPlan(null);
+    // Yield a frame so the loading state appears before running the planner.
+    setTimeout(() => {
+      if (generation.current !== token) return;
+      try {
+        const input = latest.current;
+        const result = generatePlan(
+          input.state,
+          input.first,
+          input.count,
+          new Date(),
+        );
+        if (generation.current !== token) return;
+        setPlan(result);
+        setStatus(
+          result.activities.some((a) => a.category === "study")
+            ? "ready"
+            : "empty",
+        );
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setStatus("error");
+      }
+    }, 30);
   };
-  const accept = () => {
-    const problem = validatePlan(plan, state, new Date());
-    if (problem) {
-      setError(problem);
-      return;
-    }
-    if (!plan.activities.length) {
-      setError(
-        "There are no sessions to accept. Add topics or adjust your commitments.",
+  useEffect(() => {
+    regenerate();
+    return () => {
+      generation.current++;
+    };
+  }, []); // first open and StrictMode-safe cancellation
+  const invalidate = () => {
+    generation.current++;
+    setPlan(null);
+    setStatus("idle");
+    setError("");
+  };
+  const isAccepted = (id: string) =>
+    !!plan && state.acceptedSuggestionIds.includes(receiptFor(plan, id));
+  const pending = plan?.activities.filter((a) => !isAccepted(a.id)) ?? [];
+  const busy = status === "saving" || status === "loading";
+  const accept = async (ids?: string[]) => {
+    if (!plan || saving.current) return;
+    saving.current = true;
+    setStatus("saving");
+    setError("");
+    try {
+      const saved = await commit((current) =>
+        acceptProposal(current, plan, ids, new Date()),
       );
-      return;
+      const remaining = plan.activities.some(
+        (a) =>
+          a.category === "study" &&
+          !saved.acceptedSuggestionIds.includes(receiptFor(plan, a.id)),
+      );
+      setStatus(remaining ? "ready" : "accepted");
+      toast("Accepted sessions saved to your calendar.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setStatus("error");
+    } finally {
+      saving.current = false;
     }
-    update((s) => ({
-      ...s,
-      activities: [
-        ...s.activities,
-        ...plan.activities.map((a) => ({ ...a, id: uid() })),
-      ],
-    }));
-    toast("Your study plan is on the calendar. One step at a time.");
-    close();
   };
-  const studied = plan.activities.filter((a) => a.category === "study"),
-    total = studied.reduce((n, a) => n + duration(a), 0);
-  const changeTime = (id: string, key: "start" | "end", value: string) => {
-    if (value.length < 16) return;
-    const iso = at(value.slice(0, 10), value.slice(11), tz);
-    setPlan({
-      ...plan,
-      activities: plan.activities.map((a) =>
-        a.id === id ? { ...a, [key]: iso } : a,
-      ),
-    });
+  const changeTime = (id: string, field: "start" | "end", value: string) => {
+    if (!plan) return;
+    try {
+      const changed = modifyProposal(plan, id, field, value, tz);
+      setPlan(changed);
+      setError(
+        validatePlan(
+          {
+            ...changed,
+            activities: changed.activities.filter((a) => !isAccepted(a.id)),
+          },
+          state,
+          new Date(),
+        ) ?? "",
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
   return (
     <Modal
-      title="A little help finding your focus"
-      subtitle="Thoughtful suggestions, built around your real life. Nothing changes until you accept."
-      close={close}
+      title="Study plan proposals"
+      subtitle={`Review recommendations before accepting. Times in ${tz}.`}
+      close={() => {
+        if (!saving.current) close();
+      }}
       wide
     >
       <div className="form-body planner">
@@ -99,12 +146,12 @@ export default function Planner({
             <input
               aria-label="Plan start date"
               type="date"
-              min={today}
-              required
+              min={dayKey(new Date(), tz)}
               value={first}
+              disabled={status === "saving"}
               onChange={(e) => {
-                if (e.target.value && e.target.value >= today)
-                  setFirst(e.target.value);
+                invalidate();
+                setFirst(e.target.value);
               }}
             />
           </Field>
@@ -112,189 +159,255 @@ export default function Planner({
             <select
               aria-label="Plan length"
               value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
+              disabled={status === "saving"}
+              onChange={(e) => {
+                invalidate();
+                setCount(Number(e.target.value));
+              }}
             >
-              <option value="1">Today / 1 day</option>
-              <option value="3">3 days</option>
-              <option value="7">7 days</option>
+              <option value={1}>1 day</option>
+              <option value={3}>3 days</option>
+              <option value={7}>7 days</option>
+              <option value={14}>14 days</option>
+              <option value={31}>31 days</option>
             </select>
           </Field>
-          <Button icon={RefreshCw} onClick={regenerate}>
-            Regenerate
-          </Button>
-        </div>
-        <div className="plan-summary">
-          <div>
-            <Sparkles size={22} />
-            <span>
-              <strong>{hours(total)}</strong> of focused study
-            </span>
-          </div>
-          <span>
-            {studied.length} sessions · {plan.days.length} days
-          </span>
-          <span>Sleep & commitments protected</span>
-        </div>
-        <div className="plan-day-strip">
-          {plan.days.map((d) => (
-            <div key={d.date}>
-              <span>{prettyDay(d.date, { weekday: "short" })}</span>
-              <strong>
-                {hours(
-                  plan.activities
-                    .filter(
-                      (a) =>
-                        a.category === "study" &&
-                        dayKey(a.start, tz) === d.date,
-                    )
-                    .reduce((n, a) => n + duration(a), 0),
-                )}
-              </strong>
-              <small>{hours(d.existing)} confirmed</small>
-            </div>
-          ))}
-        </div>
-        <details className="priority-details" open>
-          <summary>
-            Why this allocation?
-            <ChevronDown size={16} />
-          </summary>
-          <div className="priority-list">
-            {plan.priorities.map((p) => {
-              const m = studied
-                .filter((a) => a.subjectId === p.subject.id)
-                .reduce((n, a) => n + duration(a), 0);
-              return (
-                <div key={p.subject.id}>
-                  <div>
-                    <strong>
-                      <span
-                        className="dot"
-                        style={{ background: p.subject.color }}
-                      />
-                      {p.subject.name}
-                    </strong>
-                    <b>{hours(m)}</b>
-                  </div>
-                  <Progress
-                    value={total ? (m / total) * 100 : 0}
-                    color={p.subject.color}
-                  />
-                  <p>
-                    {p.reason}. Priority score: {p.score.toFixed(2)}.
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-        </details>
-        {plan.explanations.map((text, i) => (
-          <p
-            key={i}
-            className={`plan-explanation ${text.includes("fit.") ? "warning" : ""}`}
+          <Button
+            type="button"
+            icon={RefreshCw}
+            disabled={busy}
+            onClick={regenerate}
           >
-            {text}
-          </p>
-        ))}
-        <div className="section-label">
-          <h3>Your proposed sessions</h3>
-          <Button icon={Pencil} onClick={() => setEditing(!editing)}>
-            {editing ? "Finish modifying" : "Modify suggestions"}
+            {plan || status === "rejected"
+              ? "Regenerate"
+              : "Generate Study Plan"}
           </Button>
         </div>
-        {plan.activities.length ? (
-          <div className="plan-sessions">
-            {plan.activities.map((a) => (
-              <div
-                className={`plan-session ${a.category === "break" ? "is-break" : ""}`}
-                key={a.id}
-              >
-                <span className="dot" style={{ background: a.color }} />
-                <div>
-                  <strong>{a.title}</strong>
-                  <p>
-                    {prettyDay(dayKey(a.start, tz), {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                    })}{" "}
-                    · {clockTime(a.start, tz)} – {clockTime(a.end, tz)} ·{" "}
-                    {hours(duration(a))}
-                  </p>
-                  {editing && (
-                    <div className="form-grid">
-                      <Field label="Start">
-                        <input
-                          type="datetime-local"
-                          aria-label={`${a.title} start`}
-                          value={localInput(a.start, tz)}
-                          onChange={(e) =>
-                            changeTime(a.id, "start", e.target.value)
-                          }
-                        />
-                      </Field>
-                      <Field label="End">
-                        <input
-                          type="datetime-local"
-                          aria-label={`${a.title} end`}
-                          value={localInput(a.end, tz)}
-                          onChange={(e) =>
-                            changeTime(a.id, "end", e.target.value)
-                          }
-                        />
-                      </Field>
-                    </div>
+        <div role="status" aria-live="polite">
+          {status === "loading" && (
+            <p>
+              Generating sessions around your commitments and protected sleep…
+            </p>
+          )}
+          {status === "idle" && (
+            <p>Planning inputs changed. Generate a fresh proposal to review.</p>
+          )}
+          {status === "saving" && <p>Saving accepted sessions to IndexedDB…</p>}
+          {status === "accepted" && (
+            <p className="notice">
+              Accepted sessions are saved to your calendar. They remain
+              available after reopening Daylight.
+            </p>
+          )}
+          {status === "rejected" && (
+            <p>Suggestions rejected. Your schedule is unchanged.</p>
+          )}
+          {status === "empty" && <h3>No study sessions could be generated</h3>}
+        </div>
+        <FormError error={error} />
+        {plan && status !== "rejected" && (
+          <>
+            <p>
+              {plan.activities.filter((a) => a.category === "study").length}{" "}
+              proposed study sessions ·{" "}
+              {hours(
+                plan.activities
+                  .filter((a) => a.category === "study")
+                  .reduce((n, a) => n + duration(a), 0),
+              )}{" "}
+              total
+            </p>
+            <details>
+              <summary>Priority and daily study recommendations</summary>
+              {plan.priorities.map((p) => (
+                <p key={p.subject.id}>
+                  <strong>
+                    {p.subject.name} · priority {p.score.toFixed(1)}
+                  </strong>
+                  <br />
+                  {p.reason}
+                </p>
+              ))}
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Recommended</th>
+                      <th>Confirmed</th>
+                      <th>Proposed</th>
+                      <th>Free time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plan.days.map((d) => (
+                      <tr key={d.date}>
+                        <td>{prettyDay(d.date)}</td>
+                        <td>{hours(d.recommended)}</td>
+                        <td>{hours(d.existing)}</td>
+                        <td>{hours(d.scheduled)}</td>
+                        <td>{hours(d.available)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+            {plan.explanations.map((text, i) => (
+              <p key={i} className="plan-explanation">
+                {text}
+              </p>
+            ))}
+            {plan.activities.length > 0 && (
+              <div className="section-label">
+                <h3>Your proposed sessions</h3>
+                <Button
+                  type="button"
+                  icon={Pencil}
+                  disabled={busy}
+                  onClick={() => setEditing(!editing)}
+                >
+                  {editing ? "Finish modifying" : "Modify suggestions"}
+                </Button>
+              </div>
+            )}
+            <div className="plan-sessions">
+              {plan.activities.map((a, index) => (
+                <div
+                  data-proposal-id={a.id}
+                  className={`plan-session ${a.category === "break" ? "is-break" : ""}`}
+                  key={a.id}
+                >
+                  <span className="dot" style={{ background: a.color }} />
+                  <div>
+                    <strong>{a.title}</strong>
+                    <p>
+                      {prettyDay(dayKey(a.start, tz), {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                      })}{" "}
+                      · {clockTime(a.start, tz)}–{clockTime(a.end, tz)} ·{" "}
+                      {duration(a)} minutes
+                    </p>
+                    <p>{a.description}</p>
+                    {isAccepted(a.id) && (
+                      <span role="status">Accepted and saved</span>
+                    )}
+                    {editing && !isAccepted(a.id) && (
+                      <div className="form-grid">
+                        {(["start", "end"] as const).map((field) => (
+                          <Field
+                            key={field}
+                            label={field === "start" ? "Start" : "End"}
+                          >
+                            <input
+                              type="datetime-local"
+                              aria-label={`${a.title} ${field}`}
+                              value={localInput(a[field], tz)}
+                              disabled={busy}
+                              onChange={(e) =>
+                                changeTime(a.id, field, e.target.value)
+                              }
+                            />
+                          </Field>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {!isAccepted(a.id) && a.category === "study" && (
+                    <Button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        const next = plan.activities[index + 1];
+                        void accept([
+                          a.id,
+                          ...(next?.category === "break" &&
+                          next.start === a.end &&
+                          !isAccepted(next.id)
+                            ? [next.id]
+                            : []),
+                        ]);
+                      }}
+                    >
+                      Accept session
+                    </Button>
+                  )}
+                  {editing && !isAccepted(a.id) && (
+                    <IconButton
+                      type="button"
+                      icon={Trash2}
+                      label={`Remove suggested ${a.title}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setPlan({
+                          ...plan,
+                          activities: plan.activities.filter(
+                            (x) => x.id !== a.id,
+                          ),
+                        });
+                        setError("");
+                      }}
+                    />
                   )}
                 </div>
-                {editing && (
-                  <IconButton
-                    icon={Trash2}
-                    label={`Remove suggested ${a.title}`}
-                    onClick={() =>
-                      setPlan({
-                        ...plan,
-                        activities: plan.activities.filter(
-                          (x) => x.id !== a.id,
-                        ),
-                      })
-                    }
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Empty
-            icon={Sparkles}
-            title="A little more context would help"
-            text="Add unfinished topics or upcoming assessments, check your available time, and regenerate. Already confirmed study also counts toward your workload."
-          />
+              ))}
+            </div>
+            {pending.some((a) => a.category === "study") && (
+              <p>
+                Accept session also protects its following break. Other
+                suggestions remain proposals.
+              </p>
+            )}
+          </>
         )}
-        <FormError error={error} />
         <div className="form-footer sticky-footer">
           <Button
+            type="button"
             icon={X}
+            disabled={
+              busy || !plan || status === "rejected" || status === "accepted"
+            }
             onClick={() => {
-              update((s) => ({
-                ...s,
-                rejectedDays: [
-                  ...new Set([
-                    ...s.rejectedDays,
-                    ...plan.days.map((d) => d.date),
-                  ]),
-                ],
-              }));
-              toast("Suggestions dismissed. Your calendar stays as it is.");
-              close();
+              setStatus("rejected");
+              setError("");
             }}
           >
             Reject suggestions
           </Button>
+          {viewCalendar &&
+            plan &&
+            state.acceptedSuggestionIds.some((id) =>
+              id.startsWith(`${plan.id}:`),
+            ) && (
+              <Button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  viewCalendar(
+                    dayKey(
+                      plan.activities.find(
+                        (a) => a.category === "study" && isAccepted(a.id),
+                      )!.start,
+                      tz,
+                    ),
+                  )
+                }
+              >
+                View calendar
+              </Button>
+            )}
           <Button
+            type="button"
             variant="primary"
             icon={Check}
-            onClick={accept}
-            disabled={!plan.activities.length}
+            disabled={
+              busy ||
+              status === "rejected" ||
+              !pending.some((a) => a.category === "study")
+            }
+            onClick={() => void accept()}
           >
             Accept plan
           </Button>

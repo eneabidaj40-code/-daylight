@@ -32,15 +32,18 @@ import {
   PageHeading,
 } from "../ui";
 import type { Editor } from "../editors";
+import AcademicCalendar from "../AcademicCalendar";
 
 export default function Calendar({
   now,
   open,
   selectedDate,
+  plan,
 }: {
   now: Date;
   open: (editor: Editor) => void;
   selectedDate: string;
+  plan: () => void;
 }) {
   const { state, update, toast } = useStore(),
     tz = state.settings.timezone,
@@ -106,6 +109,7 @@ export default function Calendar({
         title="Room for what matters."
         text={`A clear view of your week. All times in ${tz}.`}
       >
+        <Button onClick={plan}>Generate Study Plan</Button>
         <Button icon={Plus} onClick={() => open({ type: "class" })}>
           Add class
         </Button>
@@ -118,6 +122,12 @@ export default function Calendar({
         </Button>
       </PageHeading>
       <div className="page-tabs">
+        <button
+          className={tab === "academic" ? "active" : ""}
+          onClick={() => setTab("academic")}
+        >
+          Academic calendar
+        </button>
         <button
           className={tab === "calendar" ? "active" : ""}
           onClick={() => setTab("calendar")}
@@ -284,6 +294,8 @@ export default function Calendar({
             move, then confirm it.
           </p>
         </section>
+      ) : tab === "academic" ? (
+        <AcademicCalendar />
       ) : (
         <section className="card">
           <div className="card-heading">
